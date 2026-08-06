@@ -1,0 +1,25 @@
+name: Concours du jour
+
+on:
+  schedule:
+    - cron: '0 11 * * *'  # 11h00 UTC = 7h00 heure de Montréal (EDT)
+  workflow_dispatch:       # permet de lancer manuellement pour tester
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Run script
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python concours_daily.py

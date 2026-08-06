@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 # CONFIG
 # ============================================================
 YOUR_EMAIL         = "tajoel2005@gmail.com"
-GMAIL_APP_PASSWORD = "YOUR_APP_PASSWORD_HERE"
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "YOUR_APP_PASSWORD_HERE")
 SEEN_FILE          = os.path.join(os.path.dirname(os.path.abspath(__file__)), "concours_seen.json")
 URGENT_DAYS        = 5
 MAX_POSTS          = 60
