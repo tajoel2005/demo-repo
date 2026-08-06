@@ -1,0 +1,6 @@
+concours_seen.json
+concours_preview.html
+concours_daily.log
+*.log
+venv/
+__pycache__/
