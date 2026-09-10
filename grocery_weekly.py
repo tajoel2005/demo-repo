@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-grocery_weekly.py v2
+grocery_weekly.py v3
 --------------------
 Every Friday morning, checks Flipp (backflipp.wishabi.com) for deals
 on your grocery list near Montreal Nord (H1H 4J5).
@@ -24,45 +24,48 @@ GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "YOUR_APP_PASSWORD_HER
 POSTAL_CODE        = "H1H4J5"
 
 GROCERY_LIST = [
-    ("lait",            "milk"),
-    ("porc",            "pork"),
-    ("tofu",            "tofu"),
-    ("jus d'orange",    "orange juice"),
-    ("feta",            "feta"),
-    ("arachides",       "peanuts"),
-    ("raisins secs",    "raisins"),
-    ("plantain",        "plantain"),
-    ("pommes",          "apples"),
-    ("fraises",         "strawberries"),
-    ("mangues",         "mangoes"),
-    ("raisin",          "grapes"),
-    ("confiture fraise","strawberry jam"),
-    ("fromage frais",   "cream cheese"),
-    ("crème sure",      "sour cream"),
-    ("melon d'eau",     "watermelon"),
-    ("framboises",      "raspberries"),
-    ("bananes",         "bananas"),
-    ("amandes",         "almonds"),
-    ("oeufs",           "eggs"),
-    ("avocats",         "avocado"),
-    ("chips",           "chips"),
-    ("sirop d'érable",  "maple syrup"),
-    ("miel",            "honey"),
-    ("saumon",          "salmon"),
-    ("crevettes",       "shrimp"),
-    ("patates",         "potatoes"),
-    ("oignons",         "onions"),
-    ("macaroni",        "macaroni"),
-    ("riz",             "rice"),
-    ("céréales",        "corn flakes cereal"),
-    ("mozzarella",      "mozzarella"),
-    ("fromage edam",    "edam cheese"),
-    ("camembert",       "camembert"),
-    ("saumon frais",    "fresh salmon"),
-    ("pangasius",       "pangasius"),
+    ("lait",             "milk"),
+    ("porc",             "pork"),
+    ("tofu",             "tofu"),
+    ("jus d'orange",     "orange juice"),
+    ("feta",             "feta"),
+    ("arachides",        "peanuts"),
+    ("raisins secs",     "raisins"),
+    ("plantain",         "plantain"),
+    ("pommes",           "apples"),
+    ("fraises",          "strawberries"),
+    ("mangues",          "mangoes"),
+    ("raisin",           "grapes"),
+    ("confiture fraise", "strawberry jam"),
+    ("fromage frais",    "cream cheese"),
+    ("crème sure",       "sour cream"),
+    ("melon d'eau",      "watermelon"),
+    ("framboises",       "raspberries"),
+    ("bananes",          "bananas"),
+    ("amandes",          "almonds"),
+    ("oeufs",            "eggs"),
+    ("avocats",          "avocado"),
+    ("chips",            "chips"),
+    ("sirop d'érable",   "maple syrup"),
+    ("miel",             "honey"),
+    ("saumon",           "salmon"),
+    ("crevettes",        "shrimp"),
+    ("patates",          "potatoes"),
+    ("oignons",          "onions"),
+    ("macaroni",         "macaroni"),
+    ("riz",              "rice"),
+    ("céréales",         "corn flakes cereal"),
+    ("mozzarella",       "mozzarella"),
+    ("fromage edam",     "edam cheese"),
+    ("camembert",        "camembert"),
+    ("pangasius",        "pangasius"),
 ]
 
-TARGET_STORES = ["maxi", "super c", "iga", "walmart", "metro", "provigo", "adonis", "tnt", "marché"]
+TARGET_STORES = [
+    "maxi", "super c", "iga", "walmart", "metro",
+    "adonis", "kim phat", "euro marche", "marché richelieu",
+    "marché bonichoix", "marché tradition", "rachelle"
+]
 # ============================================================
 
 FLIPP_URL = "https://backflipp.wishabi.com/flipp/items/search"
@@ -85,7 +88,6 @@ def search_item(keyword_en: str) -> list:
         r = requests.get(FLIPP_URL, params=params, headers=HEADERS, timeout=15)
         r.raise_for_status()
         data = r.json()
-        # Use flyer items (in-store circulars), not ecom
         return data.get("items", [])
     except Exception as e:
         print(f"[WARN] Flipp '{keyword_en}': {e}", file=sys.stderr)
@@ -105,20 +107,19 @@ def find_best_deals(label_fr: str, keyword_en: str) -> list:
         if price is None:
             continue
 
-        # Filter to target stores only
-        if TARGET_STORES and not any(s in merchant for s in TARGET_STORES):
+        # Case-insensitive partial match against target stores
+        if not any(s.lower() in merchant for s in TARGET_STORES):
             continue
 
         deals.append({
-            "label_fr":  label_fr,
-            "name":      name,
-            "merchant":  item.get("merchant_name", ""),
-            "price":     float(price),
-            "orig":      float(orig) if orig else None,
-            "valid_to":  valid_to,
+            "label_fr": label_fr,
+            "name":     name,
+            "merchant": item.get("merchant_name", ""),
+            "price":    float(price),
+            "orig":     float(orig) if orig else None,
+            "valid_to": valid_to,
         })
 
-    # Sort by price ascending, return top 3
     deals.sort(key=lambda x: x["price"])
     return deals[:3]
 
@@ -141,6 +142,7 @@ def fmt_date(d: str) -> str:
     except:
         return ""
 
+
 def build_html(results: list) -> str:
     today_str = date.today().strftime("%A %d %B %Y")
 
@@ -150,6 +152,7 @@ def build_html(results: list) -> str:
         rows = ""
         for label_fr, deals in results:
             best = deals[0]
+
             savings_html = ""
             if best["orig"] and best["orig"] > best["price"]:
                 saved = best["orig"] - best["price"]
@@ -183,7 +186,7 @@ def build_html(results: list) -> str:
 
         body = f"""
         <p style="color:#555;font-size:13px;margin:0 0 16px">
-          Meilleur prix circulaire cette semaine pour chaque article · Code postal: {POSTAL_CODE} · Source: Flipp
+          Meilleur prix circulaire cette semaine · Code postal: {POSTAL_CODE} · Source: Flipp
         </p>
         <table style="width:100%;border-collapse:collapse">
           <thead>
@@ -200,14 +203,14 @@ def build_html(results: list) -> str:
 <div style="background:#0b8043;padding:16px 20px;border-radius:8px 8px 0 0">
   <h1 style="color:#fff;font-size:20px;margin:0">🛒 Épicerie — Meilleurs prix de la semaine</h1>
   <p style="color:#a8f0c6;font-size:13px;margin:4px 0 0">
-    {today_str} · Maxi · Super C · IGA · Metro · Walmart · Source: Flipp
+    {today_str} · Maxi · Super C · IGA · Metro · Walmart · Adonis · Source: Flipp
   </p>
 </div>
 <div style="border:1px solid #dadce0;border-top:none;padding:16px 20px;border-radius:0 0 8px 8px">
   {body}
   <hr style="margin:24px 0;border:none;border-top:1px solid #eee">
   <p style="color:#aaa;font-size:11px;margin:0">
-    Généré automatiquement chaque vendredi · Adonis et Marché Newon non couverts par Flipp
+    Généré automatiquement chaque vendredi · Marché Newon non couvert par Flipp
   </p>
 </div>
 </body></html>"""
@@ -230,7 +233,7 @@ def send_gmail(subject: str, html: str) -> None:
 # ── Main ───────────────────────────────────────────────────
 
 def main():
-    print(f"[{datetime.now():%Y-%m-%d %H:%M}] Starting grocery_weekly.py v2...")
+    print(f"[{datetime.now():%Y-%m-%d %H:%M}] Starting grocery_weekly.py v3...")
     results = scrape_grocery()
     print(f"  Found deals for {len(results)}/{len(GROCERY_LIST)} items")
 
