@@ -1,25 +1,52 @@
-name: Concours du jour
+name: Alertes quotidiennes
 
 on:
   schedule:
-    - cron: '0 11 * * *'  # 11h00 UTC = 7h00 heure de Montréal (EDT)
-  workflow_dispatch:       # permet de lancer manuellement pour tester
+    - cron: '0 11 * * *'      # 7h00 EDT — concours + concerts (daily)
+    - cron: '0 11 * * 5'      # 7h00 EDT vendredi — épicerie (weekly)
+  workflow_dispatch:
 
 jobs:
-  run:
+  concours:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install dependencies
         run: pip install requests beautifulsoup4
-
-      - name: Run script
+      - name: Run concours script
         env:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python concours_daily.py
+
+  concerts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests
+      - name: Run concerts script
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TM_API_KEY: ${{ secrets.TM_API_KEY }}
+        run: python concerts_daily.py
+
+  grocery:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.schedule, '* * 5')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+      - name: Run grocery script
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python grocery_weekly.py
