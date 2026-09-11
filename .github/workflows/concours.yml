@@ -3,7 +3,7 @@ name: Alertes quotidiennes
 on:
   schedule:
     - cron: '0 11 * * *'    # 7h00 EDT daily — concours
-    - cron: '0 11 * * 5'    # 7h00 EDT Friday — grocery
+    - cron: '0 11 * * 5'    # 7h00 EDT Friday — grocery + groupon
     - cron: '0 11 * * 6'    # 7h00 EDT Saturday — concerts
   workflow_dispatch:
 
@@ -36,6 +36,21 @@ jobs:
         env:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python grocery_weekly.py
+
+  groupon:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 11 * * 5'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install playwright beautifulsoup4 && playwright install chromium
+      - name: Run groupon script
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python groupon_weekly.py
 
   concerts:
     runs-on: ubuntu-latest
