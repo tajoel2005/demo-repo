@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""
-groupon_weekly.py v2
---------------------
-Scrapes Groupon Montreal for deals with 70%+ discount.
-Uses Playwright with stealth settings to avoid blocking.
-Runs weekly via GitHub Actions (Fridays).
-
-Requirements: playwright, beautifulsoup4
-"""
+"""groupon_weekly.py v3 — local Montreal deals 50%+"""
 import os, smtplib, sys, re
 from datetime import datetime, date
 from email.mime.multipart import MIMEMultipart
@@ -16,22 +8,54 @@ from bs4 import BeautifulSoup
 
 YOUR_EMAIL         = "tajoel2005@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "YOUR_APP_PASSWORD_HERE")
-MIN_DISCOUNT       = 70
-GROUPON_URL        = "https://www.groupon.com/local/montreal"
+MIN_DISCOUNT       = 50
+
+# Online/national deals to exclude — not local Montreal experiences
+EXCLUDE_KEYWORDS = [
+    "microsoft", "windows", "office", "adobe", "software", "license",
+    "activation", "digital download", "lifetime access", "printerpix",
+    "canvasonsale", "canvas on demand", "photoaffections", "printingforless",
+    "semaglutide", "tirzepatide", "weight loss", "psychic", "tarot",
+    "duct cleaning", "air duct", "chimney", "carpet cleaning",
+    "photo book", "photo canvas", "photobook", "owlkids", "magazine",
+    "subscription", "vpn", "antivirus", "acrobat",
+]
+
+# Only keep deals that mention local Montreal context
+LOCAL_KEYWORDS = [
+    "montreal", "mtl", "québec", "laval", "longueuil", "brossard",
+    "restaurant", "spa", "massage", "golf", "escape", "bowling",
+    "laser tag", "paintball", "karting", "arcade", "cinema", "theatre",
+    "yoga", "fitness", "gym", "pilates", "dance", "swim", "pool",
+    "hotel", "brunch", "dinner", "sushi", "pizza", "burger",
+    "haircut", "salon", "facial", "manicure", "pedicure",
+    "cruise", "tour", "activity", "experience", "adventure",
+    "paint", "pottery", "cooking class", "wine tasting",
+]
+
+GROUPON_URLS = [
+    "https://www.groupon.com/local/montreal",
+    "https://www.groupon.com/local/montreal/activities",
+    "https://www.groupon.com/local/montreal/health-beauty",
+    "https://www.groupon.com/local/montreal/food-drink",
+    "https://www.groupon.com/local/montreal/all-services",
+]
+
+def is_local(title):
+    t = title.lower()
+    if any(ex in t for ex in EXCLUDE_KEYWORDS):
+        return False
+    return True
 
 def scrape_groupon():
     from playwright.sync_api import sync_playwright
-    deals = []
+    all_html = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-            ]
+            args=["--no-sandbox","--disable-setuid-sandbox",
+                  "--disable-blink-features=AutomationControlled","--disable-dev-shm-usage"]
         )
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -40,83 +64,83 @@ def scrape_groupon():
             timezone_id="America/Toronto",
             extra_http_headers={
                 "Accept-Language": "en-CA,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             }
         )
-        # Remove webdriver property to avoid detection
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-        page = context.new_page()
+        for url in GROUPON_URLS:
+            try:
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(2000)
+                for _ in range(6):
+                    page.evaluate("window.scrollBy(0, 1200)")
+                    page.wait_for_timeout(1000)
+                all_html.append(page.content())
+                page.close()
+            except Exception as e:
+                print(f"[WARN] {url}: {e}", file=sys.stderr)
 
-        try:
-            page.goto(GROUPON_URL, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(3000)
+        browser.close()
 
-            # Scroll down to load more deals
-            for _ in range(10):
-                page.evaluate("window.scrollBy(0, 1200)")
-                page.wait_for_timeout(1200)
-
-            html = page.content()
-        except Exception as e:
-            print(f"[WARN] Playwright error: {e}", file=sys.stderr)
-            html = ""
-        finally:
-            browser.close()
-
-    if not html:
-        return []
-
-    soup = BeautifulSoup(html, "html.parser")
-    cards = soup.find_all("div", class_=lambda c: c and "flex-1" in c and "flex-col" in c and "gap-1" in c)
-    print(f"  Total cards found: {len(cards)}")
-
+    # Parse all pages
     seen_titles = set()
-    for card in cards:
-        text = card.get_text(" ", strip=True)
-        discount_match = re.search(r'-(\d+)%', text)
-        if not discount_match:
-            continue
-        pct = int(discount_match.group(1))
-        if pct < MIN_DISCOUNT:
-            continue
+    deals = []
 
-        prices = re.findall(r'CA?\$[\d,\.]+', text)
-        orig = prices[0] if len(prices) >= 2 else None
-        curr = prices[1] if len(prices) >= 2 else (prices[0] if prices else None)
+    for html in all_html:
+        soup = BeautifulSoup(html, "html.parser")
+        cards = soup.find_all("div", class_=lambda c: c and "flex-1" in c and "flex-col" in c and "gap-1" in c)
 
-        title = text[:80].split("  ")[0].strip()
-        if title in seen_titles:
-            continue
-        seen_titles.add(title)
+        for card in cards:
+            text = card.get_text(" ", strip=True)
+            discount_match = re.search(r'-(\d+)%', text)
+            if not discount_match:
+                continue
+            pct = int(discount_match.group(1))
+            if pct < MIN_DISCOUNT:
+                continue
 
-        parent = card.parent
-        url = None
-        for _ in range(6):
-            if parent and parent.name == "a":
-                url = parent.get("href", "")
-                if url and not url.startswith("http"):
-                    url = "https://www.groupon.com" + url
-                break
-            if parent:
-                parent = parent.parent
+            title = text[:100].split("  ")[0].strip()
+            if title in seen_titles:
+                continue
 
-        deals.append({
-            "title": title,
-            "pct":   pct,
-            "orig":  orig,
-            "curr":  curr,
-            "url":   url or GROUPON_URL,
-        })
+            # Filter out non-local deals
+            if not is_local(title):
+                continue
+
+            seen_titles.add(title)
+
+            prices = re.findall(r'CA?\$[\d,\.]+', text)
+            orig = prices[0] if len(prices) >= 2 else None
+            curr = prices[1] if len(prices) >= 2 else (prices[0] if prices else None)
+
+            parent = card.parent
+            url = None
+            for _ in range(6):
+                if parent and parent.name == "a":
+                    url = parent.get("href","")
+                    if url and not url.startswith("http"):
+                        url = "https://www.groupon.com" + url
+                    break
+                if parent:
+                    parent = parent.parent
+
+            deals.append({
+                "title": title,
+                "pct":   pct,
+                "orig":  orig,
+                "curr":  curr,
+                "url":   url or "https://www.groupon.com/local/montreal",
+            })
 
     deals.sort(key=lambda x: -x["pct"])
     return deals
 
 def build_html(deals):
     today_str = date.today().strftime("%A %d %B %Y")
-
     if not deals:
-        body = f'<p style="padding:20px 0;color:#555">Aucun deal Groupon de {MIN_DISCOUNT}%+ trouvé cette semaine à Montréal.</p>'
+        body = f'<p style="padding:20px 0;color:#555">Aucun deal local Groupon de {MIN_DISCOUNT}%+ trouvé cette semaine à Montréal.</p>'
     else:
         rows = ""
         for d in deals:
@@ -138,7 +162,7 @@ def build_html(deals):
             </tr>'''
 
         body = f'''<p style="color:#555;font-size:13px;margin:0 0 16px">
-            {len(deals)} deals Groupon de {MIN_DISCOUNT}%+ trouvés à Montréal
+            {len(deals)} deals locaux Groupon de {MIN_DISCOUNT}%+ à Montréal · Restaurants, spas, activités, expériences
           </p>
           <table style="width:100%;border-collapse:collapse">
             <thead><tr style="background:#f8f9fa;border-bottom:2px solid #ddd">
@@ -151,8 +175,8 @@ def build_html(deals):
     return f'''<!DOCTYPE html><html>
 <body style="font-family:Arial,sans-serif;max-width:700px;margin:auto;padding:20px;color:#333">
 <div style="background:#82318E;padding:16px 20px;border-radius:8px 8px 0 0">
-  <h1 style="color:#fff;font-size:20px;margin:0">Groupon Montreal — Deals {MIN_DISCOUNT}%+</h1>
-  <p style="color:#e8c8ff;font-size:13px;margin:4px 0 0">{today_str} · Source: Groupon.com</p>
+  <h1 style="color:#fff;font-size:20px;margin:0">Groupon Montreal — Deals locaux {MIN_DISCOUNT}%+</h1>
+  <p style="color:#e8c8ff;font-size:13px;margin:4px 0 0">{today_str} · Restaurants · Spas · Activités · Experiences</p>
 </div>
 <div style="border:1px solid #dadce0;border-top:none;padding:16px 20px;border-radius:0 0 8px 8px">
   {body}
@@ -173,10 +197,10 @@ def send_gmail(subject, html):
     print(f"[OK] Email sent to {YOUR_EMAIL}")
 
 def main():
-    print(f"[{datetime.now():%Y-%m-%d %H:%M}] Starting groupon_weekly.py v2...")
+    print(f"[{datetime.now():%Y-%m-%d %H:%M}] Starting groupon_weekly.py v3...")
     deals = scrape_groupon()
-    print(f"  Found {len(deals)} deals at {MIN_DISCOUNT}%+")
-    subject = f"Groupon Montreal — {len(deals)} deals {MIN_DISCOUNT}%+ ({date.today().strftime('%d %b %Y')})"
+    print(f"  Found {len(deals)} local deals at {MIN_DISCOUNT}%+")
+    subject = f"Groupon Montreal — {len(deals)} deals locaux {MIN_DISCOUNT}%+ ({date.today().strftime('%d %b %Y')})"
     send_gmail(subject, build_html(deals))
 
 if __name__ == "__main__":
