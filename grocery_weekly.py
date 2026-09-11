@@ -1,6 +1,4 @@
-cat > ~/Documents/scripts/grocery_weekly.py << 'ENDOFFILE'
 #!/usr/bin/env python3
-"""grocery_weekly.py v3"""
 import os, smtplib, sys, time
 from datetime import datetime, date
 from email.mime.multipart import MIMEMultipart
@@ -10,24 +8,12 @@ import requests
 YOUR_EMAIL         = "tajoel2005@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "YOUR_APP_PASSWORD_HERE")
 POSTAL_CODE        = "H1H4J5"
-
-GROCERY_LIST = [
-    ("lait","milk"),("porc","pork"),("tofu","tofu"),("jus d'orange","orange juice"),
-    ("feta","feta"),("arachides","peanuts"),("raisins secs","raisins"),("plantain","plantain"),
-    ("pommes","apples"),("fraises","strawberries"),("mangues","mangoes"),("raisin","grapes"),
-    ("confiture fraise","strawberry jam"),("fromage frais","cream cheese"),("crème sure","sour cream"),
-    ("melon d'eau","watermelon"),("framboises","raspberries"),("bananes","bananas"),
-    ("amandes","almonds"),("oeufs","eggs"),("avocats","avocado"),("chips","chips"),
-    ("sirop d'érable","maple syrup"),("miel","honey"),("saumon","salmon"),("crevettes","shrimp"),
-    ("patates","potatoes"),("oignons","onions"),("macaroni","macaroni"),("riz","rice"),
-    ("céréales","corn flakes"),("mozzarella","mozzarella"),("edam","edam cheese"),
-    ("camembert","camembert"),("pangasius","pangasius"),
-]
+MIN_DISCOUNT_PCT   = 50
 
 TARGET_STORES = [
     "maxi","super c","iga","walmart","metro","adonis",
-    "kim phat","euro marche","marché richelieu","marché bonichoix",
-    "marché tradition","rachelle","mayrand","provigo"
+    "kim phat","euro marche","marche richelieu","marche bonichoix",
+    "marche tradition","rachelle","mayrand","provigo"
 ]
 
 FLIPP_URL = "https://backflipp.wishabi.com/flipp/items/search"
@@ -37,94 +23,119 @@ HEADERS = {
     "Referer": "https://flipp.com/",
 }
 
-def search_item(keyword_en):
-    params = {"locale":"en-ca","postal_code":POSTAL_CODE,"q":keyword_en}
+SEARCH_KEYWORDS = [
+    "meat","chicken","beef","pork","fish","seafood","salmon","shrimp",
+    "fruit","vegetable","dairy","cheese","eggs","milk","juice",
+    "cereal","bread","pasta","rice","snack","chips","frozen",
+    "organic","sale","special","promo",
+]
+
+def search_keyword(keyword):
+    params = {"locale":"en-ca","postal_code":POSTAL_CODE,"q":keyword}
     try:
         r = requests.get(FLIPP_URL, params=params, headers=HEADERS, timeout=15)
         r.raise_for_status()
         return r.json().get("items", [])
     except Exception as e:
-        print(f"[WARN] Flipp '{keyword_en}': {e}", file=sys.stderr)
+        print(f"[WARN] {keyword}: {e}", file=sys.stderr)
         return []
 
-def find_best_deals(label_fr, keyword_en):
-    items = search_item(keyword_en)
-    deals = []
-    for item in items:
-        merchant = (item.get("merchant_name") or "").lower()
-        price    = item.get("current_price")
-        if price is None:
-            continue
-        if not any(s.lower() in merchant for s in TARGET_STORES):
-            continue
-        deals.append({
-            "label_fr": label_fr,
-            "name":     item.get("name",""),
-            "merchant": item.get("merchant_name",""),
-            "price":    float(price),
-            "orig":     float(item["original_price"]) if item.get("original_price") else None,
-            "valid_to": item.get("valid_to",""),
-        })
-    deals.sort(key=lambda x: x["price"])
-    return deals[:3]
+def scrape_deals():
+    seen_ids = set()
+    big_deals = []
 
-def scrape_grocery():
-    results = []
-    for label_fr, keyword_en in GROCERY_LIST:
-        deals = find_best_deals(label_fr, keyword_en)
-        if deals:
-            results.append((label_fr, deals))
-        time.sleep(0.3)
-    return results
+    for keyword in SEARCH_KEYWORDS:
+        items = search_keyword(keyword)
+        for item in items:
+            item_id = item.get("id") or item.get("flyer_item_id")
+            if item_id in seen_ids:
+                continue
+            seen_ids.add(item_id)
+
+            merchant = (item.get("merchant_name") or "").lower()
+            if not any(s in merchant for s in TARGET_STORES):
+                continue
+
+            price = item.get("current_price")
+            orig  = item.get("original_price")
+
+            if price is None or orig is None:
+                continue
+            if orig <= 0 or price >= orig:
+                continue
+
+            discount_pct = round((orig - price) / orig * 100)
+            if discount_pct < MIN_DISCOUNT_PCT:
+                continue
+
+            big_deals.append({
+                "name":         item.get("name",""),
+                "merchant":     item.get("merchant_name",""),
+                "price":        float(price),
+                "orig":         float(orig),
+                "discount_pct": discount_pct,
+                "valid_to":     item.get("valid_to",""),
+            })
+        time.sleep(0.2)
+
+    # Sort by discount % descending
+    big_deals.sort(key=lambda x: -x["discount_pct"])
+    return big_deals
 
 def fmt_date(d):
     try: return datetime.strptime(d[:10],"%Y-%m-%d").strftime("%d %b")
     except: return ""
 
-def build_html(results):
+def build_html(deals):
     today_str = date.today().strftime("%A %d %B %Y")
-    if not results:
-        body = '<p style="padding:20px 0;color:#555">Aucune promotion trouvée cette semaine.</p>'
+
+    if not deals:
+        body = '<p style="padding:20px 0;color:#555">Aucune promotion de 50%+ trouvee cette semaine.</p>'
     else:
         rows = ""
-        for label_fr, deals in results:
-            best = deals[0]
-            sav = ""
-            if best["orig"] and best["orig"] > best["price"]:
-                sav = f' <span style="color:#cc0000;font-size:11px">(-${best["orig"]-best["price"]:.2f})</span>'
-            vld = f'<small style="color:#aaa"> · valide jusqu\'au {fmt_date(best["valid_to"])}</small>' if best["valid_to"] else ""
-            oth = ""
-            if len(deals)>1:
-                oth = '<br><small style="color:#888">Aussi: '+", ".join(f'{d["merchant"]}: <b>${d["price"]:.2f}</b>' for d in deals[1:])+'</small>'
-            rows += f"""<tr style="border-bottom:1px solid #f0f0f0">
-              <td style="padding:10px 8px;font-weight:600;font-size:14px;width:30%;vertical-align:top">{label_fr.title()}</td>
+        for d in deals:
+            vld = f' · valide jusqu\'au {fmt_date(d["valid_to"])}' if d["valid_to"] else ""
+            rows += f'''<tr style="border-bottom:1px solid #f0f0f0">
               <td style="padding:10px 8px;font-size:14px;vertical-align:top">
-                <span style="color:#0b8043;font-weight:700">${best['price']:.2f}</span>{sav}
-                <span style="color:#555;font-size:13px"> @ {best['merchant']}</span>{vld}
-                <br><small style="color:#999;font-size:11px">{best['name'][:70]}</small>{oth}
-              </td></tr>"""
-        body = f"""<p style="color:#555;font-size:13px;margin:0 0 16px">Meilleur prix circulaire · Code postal: {POSTAL_CODE} · Source: Flipp</p>
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="background:#f8f9fa;border-bottom:2px solid #ddd">
-            <th style="padding:10px 8px;text-align:left;font-size:13px;color:#555">Article</th>
-            <th style="padding:10px 8px;text-align:left;font-size:13px;color:#555">Meilleur prix</th>
-          </tr></thead><tbody>{rows}</tbody></table>"""
-    return f"""<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;max-width:700px;margin:auto;padding:20px;color:#333">
-<div style="background:#0b8043;padding:16px 20px;border-radius:8px 8px 0 0">
-  <h1 style="color:#fff;font-size:20px;margin:0">🛒 Épicerie — Meilleurs prix de la semaine</h1>
-  <p style="color:#a8f0c6;font-size:13px;margin:4px 0 0">{today_str} · Maxi · Super C · IGA · Metro · Walmart · Source: Flipp</p>
+                <span style="font-weight:600">{d["name"][:60]}</span>
+                <br><small style="color:#555">{d["merchant"]}{vld}</small>
+              </td>
+              <td style="padding:10px 8px;text-align:right;vertical-align:top;white-space:nowrap">
+                <span style="color:#0b8043;font-weight:700;font-size:16px">${d["price"]:.2f}</span>
+                <br><small style="color:#aaa;text-decoration:line-through">${d["orig"]:.2f}</small>
+                <br><span style="background:#cc0000;color:#fff;font-size:11px;padding:2px 6px;border-radius:3px;font-weight:700">-{d["discount_pct"]}%</span>
+              </td>
+            </tr>'''
+
+        body = f'''<p style="color:#555;font-size:13px;margin:0 0 16px">
+            {len(deals)} promotions de {MIN_DISCOUNT_PCT}%+ trouvees pres de Montreal Nord · Source: Flipp
+          </p>
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="background:#f8f9fa;border-bottom:2px solid #ddd">
+              <th style="padding:10px 8px;text-align:left;font-size:13px;color:#555">Produit</th>
+              <th style="padding:10px 8px;text-align:right;font-size:13px;color:#555">Prix</th>
+            </tr></thead>
+            <tbody>{rows}</tbody>
+          </table>'''
+
+    return f'''<!DOCTYPE html><html>
+<body style="font-family:Arial,sans-serif;max-width:700px;margin:auto;padding:20px;color:#333">
+<div style="background:#cc0000;padding:16px 20px;border-radius:8px 8px 0 0">
+  <h1 style="color:#fff;font-size:20px;margin:0">Epicerie - Promotions 50%+ cette semaine</h1>
+  <p style="color:#ffcccc;font-size:13px;margin:4px 0 0">{today_str} · Maxi · Super C · IGA · Metro · Walmart · Source: Flipp</p>
 </div>
 <div style="border:1px solid #dadce0;border-top:none;padding:16px 20px;border-radius:0 0 8px 8px">
   {body}
   <hr style="margin:24px 0;border:none;border-top:1px solid #eee">
-  <p style="color:#aaa;font-size:11px;margin:0">Généré automatiquement chaque vendredi · Marché Newon non couvert par Flipp</p>
-</div></body></html>"""
+  <p style="color:#aaa;font-size:11px;margin:0">Genere automatiquement chaque vendredi</p>
+</div>
+</body></html>'''
 
 def send_gmail(subject, html):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"]    = YOUR_EMAIL
-    msg["To"]      = YOUR_EMAIL
+    msg["From"] = YOUR_EMAIL
+    msg["To"]   = YOUR_EMAIL
     msg.attach(MIMEText(html, "html", "utf-8"))
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(YOUR_EMAIL, GMAIL_APP_PASSWORD)
@@ -132,14 +143,11 @@ def send_gmail(subject, html):
     print(f"[OK] Email sent to {YOUR_EMAIL}")
 
 def main():
-    print(f"[{datetime.now():%Y-%m-%d %H:%M}] Starting grocery_weekly.py v3...")
-    results = scrape_grocery()
-    print(f"  Found deals for {len(results)}/{len(GROCERY_LIST)} items")
-    subject = f"🛒 Épicerie — meilleurs prix semaine du {date.today().strftime('%d %b %Y')}"
-    send_gmail(subject, build_html(results))
+    print(f"[{datetime.now():%Y-%m-%d %H:%M}] Starting grocery_weekly.py v4...")
+    deals = scrape_deals()
+    print(f"  Found {len(deals)} deals with {MIN_DISCOUNT_PCT}%+ discount")
+    subject = f"Epicerie - {len(deals)} promos 50%+ semaine du {date.today().strftime('%d %b %Y')}"
+    send_gmail(subject, build_html(deals))
 
 if __name__ == "__main__":
     main()
-ENDOFFILE
-echo "Done"
-grep "FLIPP_URL" ~/Documents/scripts/grocery_weekly.py
