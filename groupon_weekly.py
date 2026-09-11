@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-groupon_weekly.py
------------------
+groupon_weekly.py v2
+--------------------
 Scrapes Groupon Montreal for deals with 70%+ discount.
-Uses Playwright to load all deals including infinite scroll.
-Runs weekly via GitHub Actions.
+Uses Playwright with stealth settings to avoid blocking.
+Runs weekly via GitHub Actions (Fridays).
 
 Requirements: playwright, beautifulsoup4
 """
@@ -17,25 +17,55 @@ from bs4 import BeautifulSoup
 YOUR_EMAIL         = "tajoel2005@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "YOUR_APP_PASSWORD_HERE")
 MIN_DISCOUNT       = 70
-
-GROUPON_URL = "https://www.groupon.com/local/montreal"
+GROUPON_URL        = "https://www.groupon.com/local/montreal"
 
 def scrape_groupon():
     from playwright.sync_api import sync_playwright
     deals = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(GROUPON_URL, wait_until="networkidle", timeout=30000)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+            ]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+            locale="en-CA",
+            timezone_id="America/Toronto",
+            extra_http_headers={
+                "Accept-Language": "en-CA,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            }
+        )
+        # Remove webdriver property to avoid detection
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-        # Scroll down multiple times to load more deals
-        for _ in range(8):
-            page.evaluate("window.scrollBy(0, 1500)")
-            page.wait_for_timeout(1500)
+        page = context.new_page()
 
-        html = page.content()
-        browser.close()
+        try:
+            page.goto(GROUPON_URL, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(3000)
+
+            # Scroll down to load more deals
+            for _ in range(10):
+                page.evaluate("window.scrollBy(0, 1200)")
+                page.wait_for_timeout(1200)
+
+            html = page.content()
+        except Exception as e:
+            print(f"[WARN] Playwright error: {e}", file=sys.stderr)
+            html = ""
+        finally:
+            browser.close()
+
+    if not html:
+        return []
 
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.find_all("div", class_=lambda c: c and "flex-1" in c and "flex-col" in c and "gap-1" in c)
@@ -51,35 +81,32 @@ def scrape_groupon():
         if pct < MIN_DISCOUNT:
             continue
 
-        # Extract prices
         prices = re.findall(r'CA?\$[\d,\.]+', text)
-        orig  = prices[0] if len(prices) >= 2 else None
-        curr  = prices[1] if len(prices) >= 2 else (prices[0] if prices else None)
+        orig = prices[0] if len(prices) >= 2 else None
+        curr = prices[1] if len(prices) >= 2 else (prices[0] if prices else None)
 
-        # Extract title — first meaningful text chunk
         title = text[:80].split("  ")[0].strip()
         if title in seen_titles:
             continue
         seen_titles.add(title)
 
-        # Find URL
         parent = card.parent
         url = None
         for _ in range(6):
             if parent and parent.name == "a":
                 url = parent.get("href", "")
-                if not url.startswith("http"):
+                if url and not url.startswith("http"):
                     url = "https://www.groupon.com" + url
                 break
             if parent:
                 parent = parent.parent
 
         deals.append({
-            "title":    title,
-            "pct":      pct,
-            "orig":     orig,
-            "curr":     curr,
-            "url":      url or GROUPON_URL,
+            "title": title,
+            "pct":   pct,
+            "orig":  orig,
+            "curr":  curr,
+            "url":   url or GROUPON_URL,
         })
 
     deals.sort(key=lambda x: -x["pct"])
@@ -93,7 +120,6 @@ def build_html(deals):
     else:
         rows = ""
         for d in deals:
-            price_html = ""
             if d["orig"] and d["curr"]:
                 price_html = f'<span style="color:#0b8043;font-weight:700;font-size:16px">{d["curr"]}</span> <span style="color:#aaa;text-decoration:line-through;font-size:13px">{d["orig"]}</span>'
             elif d["curr"]:
@@ -106,13 +132,13 @@ def build_html(deals):
                 <a href="{d['url']}" style="color:#1a0dab;text-decoration:none;font-weight:600;font-size:14px">{d['title'][:70]}</a>
               </td>
               <td style="padding:10px 8px;text-align:right;vertical-align:top;white-space:nowrap">
-                {price_html}
-                <br><span style="background:#cc0000;color:#fff;font-size:11px;padding:2px 6px;border-radius:3px;font-weight:700">-{d['pct']}%</span>
+                {price_html}<br>
+                <span style="background:#cc0000;color:#fff;font-size:11px;padding:2px 6px;border-radius:3px;font-weight:700">-{d['pct']}%</span>
               </td>
             </tr>'''
 
         body = f'''<p style="color:#555;font-size:13px;margin:0 0 16px">
-            {len(deals)} deals Groupon de {MIN_DISCOUNT}%+ trouvés à Montréal cette semaine
+            {len(deals)} deals Groupon de {MIN_DISCOUNT}%+ trouvés à Montréal
           </p>
           <table style="width:100%;border-collapse:collapse">
             <thead><tr style="background:#f8f9fa;border-bottom:2px solid #ddd">
@@ -125,13 +151,13 @@ def build_html(deals):
     return f'''<!DOCTYPE html><html>
 <body style="font-family:Arial,sans-serif;max-width:700px;margin:auto;padding:20px;color:#333">
 <div style="background:#82318E;padding:16px 20px;border-radius:8px 8px 0 0">
-  <h1 style="color:#fff;font-size:20px;margin:0">🏷️ Groupon Montreal — Deals {MIN_DISCOUNT}%+</h1>
+  <h1 style="color:#fff;font-size:20px;margin:0">Groupon Montreal — Deals {MIN_DISCOUNT}%+</h1>
   <p style="color:#e8c8ff;font-size:13px;margin:4px 0 0">{today_str} · Source: Groupon.com</p>
 </div>
 <div style="border:1px solid #dadce0;border-top:none;padding:16px 20px;border-radius:0 0 8px 8px">
   {body}
   <hr style="margin:24px 0;border:none;border-top:1px solid #eee">
-  <p style="color:#aaa;font-size:11px;margin:0">Généré automatiquement chaque vendredi · Cliquez sur les liens pour voir les détails complets</p>
+  <p style="color:#aaa;font-size:11px;margin:0">Genere automatiquement chaque vendredi · Cliquez pour voir les details</p>
 </div>
 </body></html>'''
 
@@ -147,10 +173,10 @@ def send_gmail(subject, html):
     print(f"[OK] Email sent to {YOUR_EMAIL}")
 
 def main():
-    print(f"[{datetime.now():%Y-%m-%d %H:%M}] Starting groupon_weekly.py...")
+    print(f"[{datetime.now():%Y-%m-%d %H:%M}] Starting groupon_weekly.py v2...")
     deals = scrape_groupon()
     print(f"  Found {len(deals)} deals at {MIN_DISCOUNT}%+")
-    subject = f"🏷️ Groupon Montreal — {len(deals)} deals {MIN_DISCOUNT}%+ ({date.today().strftime('%d %b %Y')})"
+    subject = f"Groupon Montreal — {len(deals)} deals {MIN_DISCOUNT}%+ ({date.today().strftime('%d %b %Y')})"
     send_gmail(subject, build_html(deals))
 
 if __name__ == "__main__":
