@@ -2,8 +2,9 @@ name: Alertes quotidiennes
 
 on:
   schedule:
-    - cron: '0 11 * * *'      # 7h00 EDT — concours + concerts (daily)
-    - cron: '0 11 * * 5'      # 7h00 EDT vendredi — épicerie (weekly)
+    - cron: '0 11 * * *'    # 7h00 EDT daily — concours
+    - cron: '0 11 * * 5'    # 7h00 EDT Friday — grocery
+    - cron: '0 11 * * 6'    # 7h00 EDT Saturday — concerts
   workflow_dispatch:
 
 jobs:
@@ -21,24 +22,9 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python concours_daily.py
 
-  concerts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install dependencies
-        run: pip install requests
-      - name: Run concerts script
-        env:
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          TM_API_KEY: ${{ secrets.TM_API_KEY }}
-        run: python concerts_daily.py
-
   grocery:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.schedule, '* * 5')
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 11 * * 5'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -50,3 +36,19 @@ jobs:
         env:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python grocery_weekly.py
+
+  concerts:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 11 * * 6'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+      - name: Run concerts script
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TM_API_KEY: ${{ secrets.TM_API_KEY }}
+        run: python concerts_daily.py
